@@ -13,6 +13,7 @@ use HeadlessQueryAPI\Support\PostTransformer;
 use HeadlessQueryAPI\Support\RouteResolver;
 use HeadlessQueryAPI\Support\SettingsRepository;
 use WP_Error;
+use WP_Query;
 use WP_REST_Request;
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -182,15 +183,34 @@ final class Controller {
 	/**
 	 * Handles the collection endpoint.
 	 *
-	 * Implemented in step 3 of the migration plan.
-	 *
 	 * @param WP_REST_Request $request REST request.
-	 * @return WP_Error
+	 * @return array<string,mixed>|WP_Error
 	 */
 	public function get_posts( WP_REST_Request $request ) {
-		unset( $request );
+		$query_args = $this->query_mapper->map_collection_request( $request );
 
-		return $this->not_implemented();
+		if ( is_wp_error( $query_args ) ) {
+			return $query_args;
+		}
+
+		$query   = new WP_Query( $query_args );
+		$options = $this->response_options( $request, 'collection' );
+		$data    = array();
+
+		foreach ( $query->posts as $post ) {
+			$data[] = $this->post_transformer->transform( $post, $options );
+		}
+
+		return array(
+			'data'       => $data,
+			'pagination' => array(
+				'page'        => (int) $query_args['paged'],
+				'per_page'    => (int) $query_args['posts_per_page'],
+				'total'       => (int) $query->found_posts,
+				'total_pages' => (int) $query->max_num_pages,
+			),
+			'meta'       => $this->response_meta( $request ),
+		);
 	}
 
 	/**
@@ -370,6 +390,60 @@ final class Controller {
 			__( 'This endpoint is registered and will be implemented in a later migration step.', 'headless-query-api' ),
 			array( 'status' => 501 )
 		);
+	}
+
+	/**
+	 * Builds shared response options from request parameters.
+	 *
+	 * @param WP_REST_Request $request REST request.
+	 * @param string          $context Response context.
+	 * @return array<string,mixed>
+	 */
+	private function response_options( WP_REST_Request $request, $context ) {
+		$fields = SettingsRepository::sanitize_list( $request->get_param( 'fields' ) );
+
+		if ( empty( $fields ) ) {
+			$fields = $this->settings->default_fields( $context );
+		}
+
+		$include_terms = $request->get_param( 'include_terms' );
+		if ( null === $include_terms ) {
+			$include_terms = (bool) $this->settings->get( 'include_terms_default', false );
+		}
+
+		$include_featured_image = $request->get_param( 'include_featured_image' );
+		if ( null === $include_featured_image ) {
+			$include_featured_image = (bool) $this->settings->get( 'include_featured_image_default', false );
+		}
+
+		return array(
+			'fields'                 => $fields,
+			'include_terms'          => (bool) $include_terms,
+			'include_featured_image' => (bool) $include_featured_image,
+			'acf_projection'         => $this->acf_projector->projection_from_request( $request->get_param( 'acf' ) ),
+		);
+	}
+
+	/**
+	 * Builds common response metadata.
+	 *
+	 * @param WP_REST_Request $request REST request.
+	 * @return array<string,mixed>
+	 */
+	private function response_meta( WP_REST_Request $request ) {
+		$meta = array(
+			'generated_at'   => gmdate( 'c' ),
+			'plugin_version' => HEADLESS_QUERY_API_VERSION,
+		);
+
+		$lang = $request->get_param( 'lang' );
+
+		if ( null !== $lang && '' !== $lang ) {
+			$meta['requested_language'] = sanitize_key( (string) $lang );
+			$meta['polylang_active']    = function_exists( 'pll_languages_list' );
+		}
+
+		return $meta;
 	}
 
 	/**

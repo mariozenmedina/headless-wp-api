@@ -80,6 +80,16 @@ final class QueryMapper {
 			$args['tax_query'] = array( $taxonomy_filter );
 		}
 
+		$language = $this->map_polylang_language( $request );
+
+		if ( is_wp_error( $language ) ) {
+			return $language;
+		}
+
+		if ( null !== $language ) {
+			$args['lang'] = $language;
+		}
+
 		return $args;
 	}
 
@@ -222,6 +232,38 @@ final class QueryMapper {
 		);
 
 		return isset( $map[ $raw ] ) ? $map[ $raw ] : 'date';
+	}
+
+	/**
+	 * Maps a language request to Polylang's WP_Query argument when available.
+	 *
+	 * @param WP_REST_Request $request REST request.
+	 * @return string|null|WP_Error
+	 */
+	private function map_polylang_language( WP_REST_Request $request ) {
+		$lang = $request->get_param( 'lang' );
+
+		if ( null === $lang || '' === $lang || ! function_exists( 'pll_languages_list' ) ) {
+			return null;
+		}
+
+		$lang = sanitize_key( (string) $lang );
+
+		if ( 'all' === $lang ) {
+			return '';
+		}
+
+		$languages = pll_languages_list( array( 'fields' => 'slug' ) );
+
+		if ( ! is_array( $languages ) || ! in_array( $lang, $languages, true ) ) {
+			return new WP_Error(
+				'headless_query_language_not_available',
+				__( 'The requested language is not available.', 'headless-query-api' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return $lang;
 	}
 
 	/**
